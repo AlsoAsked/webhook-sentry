@@ -23,7 +23,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var skipHeaders = []string{"Connection", "Proxy-Connection", "User-Agent"}
+var skipHeaders = []string{"Connection", "Proxy-Connection"}
 
 var accessLog = logrus.New()
 var log = logrus.New()
@@ -332,7 +332,9 @@ func (p ProxyHTTPHandler) doProxy(ctx context.Context, r *http.Request) (*http.R
 		return nil, err
 	}
 	copyHeaders(r.Header, outboundRequest.Header)
-	outboundRequest.Header["User-Agent"] = []string{"Webhook Sentry/0.1"}
+	if _, ok := outboundRequest.Header["User-Agent"]; !ok {
+		outboundRequest.Header["User-Agent"] = []string{"Webhook Sentry/0.1"}
+	}
 	outboundRequest.ContentLength = r.ContentLength
 	return p.roundTripper.RoundTrip(outboundRequest)
 }
