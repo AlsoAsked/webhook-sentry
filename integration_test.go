@@ -414,7 +414,7 @@ func TestOutboundConnectionLifetime(t *testing.T) {
 		if err != io.ErrUnexpectedEOF {
 			t.Errorf("Expected a 'UnexpectedEOF' error, instead got: %s\n", err)
 		}
-		duration := time.Now().Sub(start)
+		duration := time.Since(start)
 		if !(duration.Seconds() >= 1.9 && duration.Seconds() <= 2.2) {
 			t.Errorf("Expected read timeout (and hence connection close) at ~2 seconds, instead it took %f seconds", duration.Seconds())
 		}
