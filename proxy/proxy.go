@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -410,10 +411,17 @@ func mapError(requestID string, err error) (int, uint16, string) {
 		if opErr, ok := v.(*net.OpError); ok {
 			return mapNetOpError(requestID, *opErr)
 		}
-	case x509.CertificateInvalidError, x509.HostnameError, x509.UnknownAuthorityError:
-		logWarn(requestID, "Certificate validation error", err)
-		return http.StatusBadGateway, CertificateValidationError, v.Error()
 	}
+
+	// Check for x509 certificate errors which may be wrapped (e.g., in *url.Error).
+	var hostnameErr x509.HostnameError
+	var certInvalidErr x509.CertificateInvalidError
+	var unknownAuthErr x509.UnknownAuthorityError
+	if errors.As(err, &hostnameErr) || errors.As(err, &certInvalidErr) || errors.As(err, &unknownAuthErr) {
+		logWarn(requestID, "Certificate validation error", err)
+		return http.StatusBadGateway, CertificateValidationError, err.Error()
+	}
+
 	return http.StatusInternalServerError, InternalServerError, "Internal Server Error"
 }
 
