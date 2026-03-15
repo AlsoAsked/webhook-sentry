@@ -81,10 +81,10 @@ func (f *testFixture) setUp(t *testing.T) *http.Client {
 
 func (f *testFixture) tearDown(t *testing.T) {
 	if f.proxy != nil {
-		f.proxy.Shutdown(context.TODO())
+		f.proxy.Shutdown(context.Background())
 	}
 	for _, s := range f.servers {
-		s.Shutdown(context.TODO())
+		s.Shutdown(context.Background())
 	}
 }
 
