@@ -20,6 +20,12 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Mitmer struct {
@@ -39,11 +45,27 @@ func NewMitmer() (*Mitmer, error) {
 }
 
 func (m *Mitmer) HandleHttpConnect(requestID string, w http.ResponseWriter, r *http.Request) {
-	// TODO: think about what context deadlines to set etc
-	outboundConn, err := m.dialContext(context.Background(), "tcp4", r.RequestURI)
+	// Extract trace context from inbound CONNECT request.
+	propagator := otel.GetTextMapPropagator()
+	inboundCtx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+
+	ctx, span := tracer.Start(inboundCtx, "CONNECT proxy",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(
+			attribute.String("http.request.method", "CONNECT"),
+			attribute.String("network.peer.address", r.RemoteAddr),
+			attribute.String("url.full", r.RequestURI),
+		),
+	)
+	defer span.End()
+
+	outboundConn, err := m.dialContext(ctx, "tcp4", r.RequestURI)
 	if err != nil {
 		responseCode, errorCode, errorMsg := mapError(requestID, err)
 		sendHTTPError(w, responseCode, errorCode, errorMsg)
+		span.SetAttributes(attribute.Int("alsoasked.proxy.error_code", int(errorCode)))
+		span.SetStatus(codes.Error, errorMsg)
+		span.RecordError(err)
 		return
 	}
 	defer outboundConn.Close()

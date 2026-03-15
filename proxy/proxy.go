@@ -18,9 +18,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
+	otellogrus "go.opentelemetry.io/contrib/bridges/otellogrus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var skipHeaders = []string{"Connection", "Proxy-Connection"}
@@ -29,18 +35,9 @@ var accessLog = logrus.New()
 var log = logrus.New()
 
 var (
-	connsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "current_inbound_connections",
-		Help: "The number of current inbound proxy connections",
-	}, []string{"listener"})
-)
-
-var (
-	responseHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "responses",
-		Help:    "Response time histogram",
-		Buckets: []float64{10, 100, 500, 1000, 5000, 10000},
-	}, []string{"error_code"})
+	tracer        trace.Tracer
+	connsCounter  metric.Int64UpDownCounter
+	durationHisto metric.Float64Histogram
 )
 
 const (
@@ -70,6 +67,14 @@ func SetupLogging(config *ProxyConfig) error {
 	return nil
 }
 
+// SetupLogBridge adds an OTel logrus hook to bridge log records to the OTel
+// Logs signal. Must be called after telemetry.Initialize().
+func SetupLogBridge(serviceName string) {
+	hook := otellogrus.NewHook(serviceName)
+	accessLog.AddHook(hook)
+	log.AddHook(hook)
+}
+
 func configureLog(logger *logrus.Logger, logConfig LogConfig, formatter logrus.Formatter) error {
 	if logConfig.File != "" {
 		f, err := os.Create(logConfig.File)
@@ -89,15 +94,27 @@ func configureLog(logger *logrus.Logger, logConfig LogConfig, formatter logrus.F
 	return nil
 }
 
-func SetupMetrics(metricsAddress string) {
-	http.Handle("/metrics", promhttp.Handler())
-	go func() {
-		if err := http.ListenAndServe(metricsAddress, nil); err != http.ErrServerClosed {
-			log.Warnf("Failed to start Prometheus metrics server: %s\n", err)
-		}
-	}()
-	prometheus.MustRegister(connsGauge)
-	prometheus.MustRegister(responseHistogram)
+func SetupMetrics() {
+	meter := otel.GetMeterProvider().Meter("webhook-sentry")
+
+	var err error
+	connsCounter, err = meter.Int64UpDownCounter("proxy.connections",
+		metric.WithDescription("The number of current inbound proxy connections"),
+	)
+	if err != nil {
+		log.Warnf("Failed to create connections counter: %s\n", err)
+	}
+
+	durationHisto, err = meter.Float64Histogram("proxy.request.duration",
+		metric.WithDescription("Proxy request duration in milliseconds"),
+		metric.WithUnit("ms"),
+		metric.WithExplicitBucketBoundaries(10, 100, 500, 1000, 5000, 10000),
+	)
+	if err != nil {
+		log.Warnf("Failed to create duration histogram: %s\n", err)
+	}
+
+	tracer = otel.GetTracerProvider().Tracer("webhook-sentry")
 }
 
 func StartHTTPServer(listenAddress string, server *http.Server, wg *sync.WaitGroup) {
@@ -129,7 +146,7 @@ func StartTLSServer(listenAddress, certFile, keyFile string, server *http.Server
 func CreateProxyServers(proxyConfig *ProxyConfig) []*http.Server {
 
 	sd := newSafeDialer(proxyConfig)
-	transport := &http.Transport{
+	baseTransport := &http.Transport{
 		Proxy:              nil,
 		IdleConnTimeout:    time.Duration(20) * time.Second,
 		DisableKeepAlives:  true,
@@ -137,6 +154,18 @@ func CreateProxyServers(proxyConfig *ProxyConfig) []*http.Server {
 		DialContext:        sd.DialContext,
 		DialTLSContext:     sd.DialTLSContext,
 	}
+
+	// Wrap with otelhttp to create CLIENT spans for outbound requests and
+	// inject traceparent headers automatically.
+	transport := otelhttp.NewTransport(baseTransport,
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			host := r.URL.Host
+			if host == "" {
+				host = r.Host
+			}
+			return r.Method + " " + host
+		}),
+	)
 
 	var mitmer *Mitmer
 	var err error
@@ -157,19 +186,17 @@ func CreateProxyServers(proxyConfig *ProxyConfig) []*http.Server {
 
 	var proxyServers []*http.Server
 	for _, listenerConfig := range proxyConfig.Listeners {
-		listenerConnsGauge := connsGauge.With(prometheus.Labels{"listener": listenerConfig.Address})
-		proxyServers = append(proxyServers, newProxyServer(listenerConfig, proxyConfig, sd, transport, mitmer, listenerConnsGauge))
+		proxyServers = append(proxyServers, newProxyServer(listenerConfig, proxyConfig, sd, transport, mitmer))
 	}
 	return proxyServers
 }
 
-func newProxyServer(listenerConfig ListenerConfig, proxyConfig *ProxyConfig, sd *safeDialer, rt http.RoundTripper, mitmer *Mitmer, connsGauge prometheus.Gauge) *http.Server {
+func newProxyServer(listenerConfig ListenerConfig, proxyConfig *ProxyConfig, sd *safeDialer, rt http.RoundTripper, mitmer *Mitmer) *http.Server {
 	handler := &ProxyHTTPHandler{
 		roundTripper:               rt,
 		outboundConnectionLifetime: proxyConfig.ConnectionLifetime,
 		idleReadTimeout:            proxyConfig.ReadTimeout,
 		maxContentLength:           proxyConfig.MaxResponseBodySize,
-		currentInboundConnsGauge:   connsGauge,
 		mitmer:                     mitmer,
 		requestIDHeader:            proxyConfig.RequestIDHeader,
 	}
@@ -186,7 +213,6 @@ type ProxyHTTPHandler struct {
 	roundTripper               http.RoundTripper
 	outboundConnectionLifetime time.Duration
 	idleReadTimeout            time.Duration
-	currentInboundConnsGauge   prometheus.Gauge
 	maxContentLength           uint32
 	mitmer                     *Mitmer
 	requestIDHeader            string
@@ -205,7 +231,28 @@ func (p *ProxyHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if requestID == "" {
 			requestID = uuid.New().String()
 		}
-		ctx, cancel := context.WithTimeout(context.TODO(), p.outboundConnectionLifetime)
+
+		// Extract trace context from inbound request headers (traceparent).
+		propagator := otel.GetTextMapPropagator()
+		inboundCtx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+
+		scheme := "http"
+		if isTLS(r.Header) {
+			scheme = "https"
+		}
+
+		spanName := r.Method + " proxy"
+		ctx, span := tracer.Start(inboundCtx, spanName,
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				attribute.String("http.request.method", r.Method),
+				attribute.String("url.scheme", scheme),
+				attribute.String("network.peer.address", r.RemoteAddr),
+			),
+		)
+		defer span.End()
+
+		ctx, cancel := context.WithTimeout(ctx, p.outboundConnectionLifetime)
 		defer cancel()
 		start := time.Now()
 		resp, err := p.doProxy(ctx, r)
@@ -231,30 +278,36 @@ func (p *ProxyHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sendHTTPError(w, responseCode, errorCode, errorMessage)
 		}
 
-		duration := time.Now().Sub(start)
+		span.SetAttributes(attribute.Int("http.response.status_code", responseCode))
+
+		if errorCode != 0 {
+			span.SetAttributes(attribute.Int("alsoasked.proxy.error_code", int(errorCode)))
+			span.SetStatus(codes.Error, errorMessage)
+			if err != nil {
+				span.RecordError(err)
+			}
+		}
+
+		duration := time.Since(start)
 		if errorCode == InternalServerError {
 			logError(requestID, "Unexpected error while proxying request", err)
 		}
 		logRequest(r, requestID, responseCode, duration)
-		updateMetrics(duration, errorCode)
+		updateMetrics(ctx, duration, errorCode)
 	}
 }
 
 func (p *ProxyHTTPHandler) connStateCallback(conn net.Conn, connState http.ConnState) {
 	// NOTE: Hijacked connections do not transition to closed
 	if connState == http.StateNew {
-		p.incrementInboundConns()
+		if connsCounter != nil {
+			connsCounter.Add(context.Background(), 1)
+		}
 	} else if connState == http.StateClosed {
-		p.decrementInboundConns()
+		if connsCounter != nil {
+			connsCounter.Add(context.Background(), -1)
+		}
 	}
-}
-
-func (p *ProxyHTTPHandler) incrementInboundConns() {
-	p.currentInboundConnsGauge.Inc()
-}
-
-func (p *ProxyHTTPHandler) decrementInboundConns() {
-	p.currentInboundConnsGauge.Dec()
 }
 
 func writeResponseHeaders(w http.ResponseWriter, resp *http.Response) {
@@ -273,7 +326,6 @@ func writeResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 }
 
 func (p *ProxyHTTPHandler) writeResponseBody(requestID string, w http.ResponseWriter, resp *http.Response, cancel context.CancelFunc) {
-	defer resp.Body.Close()
 	// XXX: pick optimal buffer size
 	buf := make([]byte, 512)
 	timer := time.AfterFunc(p.idleReadTimeout, func() {
@@ -408,8 +460,12 @@ func doLog(requestID string, message string, err error, level logrus.Level) {
 	logger.Log(level, message)
 }
 
-func updateMetrics(duration time.Duration, errorCode uint16) {
-	responseHistogram.With(prometheus.Labels{"error_code": strconv.Itoa(int(errorCode))}).Observe(float64(duration.Milliseconds()))
+func updateMetrics(ctx context.Context, duration time.Duration, errorCode uint16) {
+	if durationHisto != nil {
+		durationHisto.Record(ctx, float64(duration.Milliseconds()),
+			metric.WithAttributes(attribute.Int("alsoasked.proxy.error_code", int(errorCode))),
+		)
+	}
 }
 
 func isTLS(h http.Header) bool {
@@ -583,13 +639,6 @@ type proxyError struct {
 
 func (p *proxyError) Error() string {
 	return fmt.Sprintf("%s, Status code: %d", p.message, p.statusCode)
-}
-
-func isTruish(val string) bool {
-	if val == "" {
-		return false
-	}
-	return val == "1" || strings.EqualFold(val, "true")
 }
 
 type AccessLogTextFormatter struct {

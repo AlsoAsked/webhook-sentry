@@ -1,20 +1,31 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
-	"github.com/juggernaut/webhook-sentry/proxy"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/juggernaut/webhook-sentry/proxy"
+	"github.com/juggernaut/webhook-sentry/telemetry"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 //go:embed banner.txt
 var banner string
+
+// version is set at build time via -ldflags "-X main.version=<sha>".
+var version string = "dev"
 
 var (
 	cfgFile string
@@ -50,6 +61,7 @@ func init() {
 	rootCmd.Flags().String("proxy-log-file", "", "Path to proxy log file (default goes to stdout)")
 	rootCmd.Flags().String("metrics-address", ":2112", "Address to expose prometheus metrics on")
 	rootCmd.Flags().StringSlice("cidr-deny-list", nil, "List of CIDRs to be blocked (see docs for default)")
+	rootCmd.Flags().String("otel-service-name", "webhook-sentry", "OpenTelemetry service name")
 
 	viper.BindPFlag("listener.address", rootCmd.Flags().Lookup("listener-address"))
 	viper.BindPFlag("listener.type", rootCmd.Flags().Lookup("listener-type"))
@@ -67,6 +79,7 @@ func init() {
 	viper.BindPFlag("proxyLog.file", rootCmd.Flags().Lookup("proxy-log-file"))
 	viper.BindPFlag("metrics.address", rootCmd.Flags().Lookup("metrics-address"))
 	viper.BindPFlag("cidrDenyList", rootCmd.Flags().Lookup("cidr-deny-list"))
+	viper.BindPFlag("otel.serviceName", rootCmd.Flags().Lookup("otel-service-name"))
 
 	viper.SetDefault("cidrDenyList", []string{
 		"127.0.0.0/8",
@@ -93,6 +106,7 @@ func init() {
 	viper.SetDefault("proxyLog.type", "text")
 	viper.SetDefault("metrics.address", ":2112")
 	viper.SetDefault("requestIDHeader", "Request-ID")
+	viper.SetDefault("otel.serviceName", "webhook-sentry")
 
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -119,6 +133,30 @@ func initConfig() {
 }
 
 func execute() {
+	ctx := context.Background()
+
+	// Initialize OpenTelemetry before anything else.
+	serviceName := viper.GetString("otel.serviceName")
+
+	deployEnv := os.Getenv("OTEL_DEPLOYMENT_ENVIRONMENT")
+	if deployEnv == "" {
+		deployEnv = "development"
+	}
+
+	otelShutdown, err := telemetry.Initialize(ctx, telemetry.Config{
+		ServiceName:    serviceName,
+		ServiceVersion: version,
+		ResourceAttributes: []attribute.KeyValue{
+			attribute.String("deployment.environment.name", deployEnv),
+			semconv.CloudProviderAWS,
+			semconv.CloudRegion("eu-west-2"),
+			attribute.Int("SampleRate", 1),
+		},
+	})
+	if err != nil {
+		log.Fatalf("Failed to initialize OpenTelemetry: %s\n", err)
+	}
+
 	var cidrs []proxy.Cidr
 	for _, c := range viper.GetStringSlice("cidrDenyList") {
 		cidrs = append(cidrs, validCidr(c))
@@ -159,7 +197,8 @@ func execute() {
 		log.Fatalf("Failed to configure logging: %s\n", err)
 	}
 
-	proxy.SetupMetrics(config.MetricsAddress)
+	proxy.SetupLogBridge(serviceName)
+	proxy.SetupMetrics()
 
 	fmt.Print(banner)
 
@@ -174,8 +213,27 @@ func execute() {
 			proxy.StartTLSServer(listenerConfig.Address, listenerConfig.CertFile, listenerConfig.KeyFile, proxyServer, wg)
 		}
 	}
-	wg.Wait()
 
+	// Wait for SIGINT/SIGTERM to gracefully shutdown.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down...")
+
+	// Flush pending OTel data before exiting.
+	otelCtx, otelCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer otelCancel()
+	if err := otelShutdown(otelCtx); err != nil {
+		log.Printf("Failed to shutdown OpenTelemetry: %s\n", err)
+	}
+
+	// Shutdown proxy servers.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	for _, server := range proxyServers {
+		server.Shutdown(shutdownCtx)
+	}
 }
 
 func validProtocol(proto string) proxy.Protocol {

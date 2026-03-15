@@ -8,8 +8,8 @@ import (
 	"crypto/x509"
 	_ "embed"
 	"fmt"
-	"io/ioutil"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -199,7 +199,7 @@ func loadRootCABundle() *x509.CertPool {
 }
 
 func UnmarshalConfigFromFile(configFile string) (*ProxyConfig, error) {
-	configData, err := ioutil.ReadFile(configFile)
+	configData, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, fmt.Errorf("Error reading file %s: %s", configFile, err)
 	}

@@ -3,3 +3,4 @@ certs/
 .idea/
 .tool-versions
 config.yaml
+webhook-sentry
