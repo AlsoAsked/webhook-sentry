@@ -718,7 +718,8 @@ func startProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 	go func() {
 		listener, err := net.Listen("tcp4", p.Listeners[0].Address)
 		if err != nil {
-			t.Fatalf("Could not start proxy listener: %s\n", err)
+			t.Errorf("Could not start proxy listener: %s\n", err)
+			return
 		}
 		proxy.Serve(listener)
 	}()
@@ -739,7 +740,8 @@ func startTLSProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 	go func() {
 		listener, err := net.Listen("tcp4", p.Listeners[0].Address)
 		if err != nil {
-			t.Fatalf("Could not start proxy listener: %s\n", err)
+			t.Errorf("Could not start proxy listener: %s\n", err)
+			return
 		}
 		pServer.ServeTLS(listener, p.Listeners[0].CertFile, p.Listeners[0].KeyFile)
 	}()
@@ -759,7 +761,8 @@ func startTLSProxyWithCert(t *testing.T, p *proxy.ProxyConfig, proxyCert *tls.Ce
 		config := &tls.Config{Certificates: []tls.Certificate{*proxyCert}}
 		listener, err := tls.Listen("tcp4", p.Listeners[0].Address, config)
 		if err != nil {
-			t.Fatalf("Could not start proxy listener: %s\n", err)
+			t.Errorf("Could not start proxy listener: %s\n", err)
+			return
 		}
 		pServer.Serve(listener)
 	}()
@@ -787,7 +790,7 @@ func startTargetServer(t *testing.T, headerChan chan map[string][]string) *http.
 	}
 	go func() {
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			t.Fatalf("Failed to start target HTTP server: %s\n", err)
+			t.Errorf("Failed to start target HTTP server: %s\n", err)
 		}
 	}()
 	return server
@@ -809,7 +812,7 @@ func startTargetHTTPSServerWithCert(t *testing.T, certFile string, keyFile strin
 	}
 	go func() {
 		if err := server.ListenAndServeTLS(certFile, keyFile); err != http.ErrServerClosed {
-			t.Fatalf("HTTPS server failed to start: %s\n", err)
+			t.Errorf("HTTPS server failed to start: %s\n", err)
 		}
 	}()
 	return server
@@ -829,10 +832,11 @@ func startTargetHTTPSServerWithInMemoryCert(t *testing.T, serverCert *tls.Certif
 		config := &tls.Config{Certificates: []tls.Certificate{*serverCert}}
 		listener, err := tls.Listen("tcp4", server.Addr, config)
 		if err != nil {
-			t.Fatalf("Failed to listen on port %s: %s\n", httpsTargetServerPort, err)
+			t.Errorf("Failed to listen on port %s: %s\n", httpsTargetServerPort, err)
+			return
 		}
 		if err := server.Serve(listener); err != http.ErrServerClosed {
-			t.Fatalf("HTTPS target server failed to start: %s\n", err)
+			t.Errorf("HTTPS target server failed to start: %s\n", err)
 		}
 	}()
 	return server
@@ -841,11 +845,13 @@ func startTargetHTTPSServerWithInMemoryCert(t *testing.T, serverCert *tls.Certif
 func startSlowToRespondServer(t *testing.T) {
 	listener, err := net.Listen("tcp4", ":14400")
 	if err != nil {
-		t.Fatalf("Failed to start slow server: %s\n", err)
+		t.Errorf("Failed to start slow server: %s\n", err)
+		return
 	}
 	conn, err := listener.Accept()
 	if err != nil {
-		t.Fatalf("Failed to accept connection in slow server: %s\n", err)
+		t.Errorf("Failed to accept connection in slow server: %s\n", err)
+		return
 	}
 	defer conn.Close()
 	time.Sleep(time.Second * 7)
@@ -859,11 +865,13 @@ func startSlowToRespondServer(t *testing.T) {
 func startNeverSendsBodyServer(t *testing.T) {
 	listener, err := net.Listen("tcp4", ":14402")
 	if err != nil {
-		t.Fatalf("Failed to start never sends body server: %s\n", err)
+		t.Errorf("Failed to start never sends body server: %s\n", err)
+		return
 	}
 	conn, err := listener.Accept()
 	if err != nil {
-		t.Fatalf("Failed to accept connection in never sends body server: %s\n", err)
+		t.Errorf("Failed to accept connection in never sends body server: %s\n", err)
+		return
 	}
 	defer conn.Close()
 	bufw := bufio.NewWriter(conn)
@@ -897,11 +905,12 @@ func startTargetHTTPSServerWithClientCertCheck(t *testing.T, serverCert *tls.Cer
 	go func() {
 		listener, err := tls.Listen("tcp4", "127.0.0.1:"+httpsTargetServerWithClientCertCheckPort, tlsConfig)
 		if err != nil {
-			t.Fatalf("Failed to listen on port %s: %s\n", httpsTargetServerWithClientCertCheckPort, err)
+			t.Errorf("Failed to listen on port %s: %s\n", httpsTargetServerWithClientCertCheckPort, err)
+			return
 		}
 
 		if err := server.Serve(listener); err != http.ErrServerClosed {
-			t.Fatalf("HTTPS server failed to start: %s\n", err)
+			t.Errorf("HTTPS server failed to start: %s\n", err)
 		}
 	}()
 	return server
