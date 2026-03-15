@@ -709,7 +709,7 @@ func waitForStartup(t *testing.T, address string) {
 func startProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 	proxy.SetupLogging(p)
 	proxy.SetupMetrics()
-	p.Listeners = make([]proxy.ListenerConfig, 1, 1)
+	p.Listeners = make([]proxy.ListenerConfig, 1)
 	p.Listeners[0] = proxy.ListenerConfig{
 		Address: proxyHttpAddress,
 		Type:    proxy.HTTP,
@@ -729,7 +729,7 @@ func startProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 func startTLSProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 	proxy.SetupLogging(p)
 	proxy.SetupMetrics()
-	p.Listeners = make([]proxy.ListenerConfig, 1, 1)
+	p.Listeners = make([]proxy.ListenerConfig, 1)
 	p.Listeners[0] = proxy.ListenerConfig{
 		Address:  proxyHttpsAddress,
 		Type:     proxy.HTTP,
@@ -751,7 +751,7 @@ func startTLSProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 func startTLSProxyWithCert(t *testing.T, p *proxy.ProxyConfig, proxyCert *tls.Certificate) *http.Server {
 	proxy.SetupLogging(p)
 	proxy.SetupMetrics()
-	p.Listeners = make([]proxy.ListenerConfig, 1, 1)
+	p.Listeners = make([]proxy.ListenerConfig, 1)
 	p.Listeners[0] = proxy.ListenerConfig{
 		Address: proxyHttpsAddress,
 		Type:    proxy.HTTP,
@@ -942,7 +942,9 @@ func startLargeContentLengthServer(t *testing.T) *http.Server {
 		Handler: serveMux,
 	}
 	go func() {
-		server.ListenAndServe()
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			t.Errorf("Failed to start large content length server: %s\n", err)
+		}
 	}()
 	return server
 }
