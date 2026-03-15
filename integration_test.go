@@ -12,7 +12,6 @@ import (
 	"github.com/juggernaut/webhook-sentry/certutil"
 	"github.com/juggernaut/webhook-sentry/proxy"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -595,7 +594,7 @@ func TestChunkedResponseContentLengthLimit(t *testing.T) {
 		if resp.StatusCode != 200 {
 			t.Fatalf("Expected status code 200, got %d\n", resp.StatusCode)
 		}
-		responseData, err := ioutil.ReadAll(resp.Body)
+		responseData, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatalf("Error reading response data: %s\n", err)
 		}
@@ -612,7 +611,7 @@ func TestChunkedResponseContentLengthLimit(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error in GET request to target server via proxy: %s\n", err)
 		}
-		responseData, err := ioutil.ReadAll(resp.Body)
+		responseData, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatalf("Got error %s\n", err)
 		}
