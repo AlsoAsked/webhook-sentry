@@ -81,7 +81,10 @@ func Initialize(ctx context.Context, cfg Config) (func(context.Context) error, e
 	tp := sdktrace.NewTracerProvider(tpOptions...)
 
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	// Metrics
 	metricReader := cfg.MetricReader

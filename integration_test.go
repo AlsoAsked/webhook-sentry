@@ -9,8 +9,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/juggernaut/webhook-sentry/certutil"
-	"github.com/juggernaut/webhook-sentry/proxy"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +17,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juggernaut/webhook-sentry/certutil"
+	"github.com/juggernaut/webhook-sentry/proxy"
 )
 
 const (
