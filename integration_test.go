@@ -709,7 +709,6 @@ func waitForStartup(t *testing.T, address string) {
 
 func startProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 	proxy.SetupLogging(p)
-	proxy.SetupMetrics()
 	p.Listeners = make([]proxy.ListenerConfig, 1)
 	p.Listeners[0] = proxy.ListenerConfig{
 		Address: proxyHttpAddress,
@@ -729,7 +728,6 @@ func startProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 
 func startTLSProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 	proxy.SetupLogging(p)
-	proxy.SetupMetrics()
 	p.Listeners = make([]proxy.ListenerConfig, 1)
 	p.Listeners[0] = proxy.ListenerConfig{
 		Address:  proxyHttpsAddress,
@@ -751,7 +749,6 @@ func startTLSProxy(t *testing.T, p *proxy.ProxyConfig) *http.Server {
 
 func startTLSProxyWithCert(t *testing.T, p *proxy.ProxyConfig, proxyCert *tls.Certificate) *http.Server {
 	proxy.SetupLogging(p)
-	proxy.SetupMetrics()
 	p.Listeners = make([]proxy.ListenerConfig, 1)
 	p.Listeners[0] = proxy.ListenerConfig{
 		Address: proxyHttpsAddress,

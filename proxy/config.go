@@ -45,7 +45,6 @@ accessLog:
   type: text
 proxyLog:
   type: text
-metricsAddress: ":2112"
 requestIDHeader: Request-ID
 `
 
@@ -69,7 +68,6 @@ type ProxyConfig struct {
 	MitmIssuerCert               *tls.Certificate           `yaml:"-"`
 	AccessLog                    LogConfig                  `yaml:"accessLog"`
 	ProxyLog                     LogConfig                  `yaml:"proxyLog"`
-	MetricsAddress               string                     `yaml:"metricsAddress"`
 	RequestIDHeader              string                     `yaml:"requestIDHeader"`
 }
 
