@@ -24,7 +24,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var skipHeaders = []string{"Connection", "Proxy-Connection"}
+var skipHeaders = []string{"Connection", "Proxy-Connection", "Sentry-Trace", "Baggage"}
 
 var accessLog = logrus.New()
 var log = logrus.New()
