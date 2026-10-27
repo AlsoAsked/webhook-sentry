@@ -1,6 +1,6 @@
 module github.com/juggernaut/webhook-sentry
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/getsentry/sentry-go v0.44.1
@@ -30,7 +30,7 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/subosito/gotenv v1.4.1 // indirect
 	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
