@@ -122,8 +122,8 @@ func initConfig() {
 }
 
 func execute() {
+	// sentry-go 0.47 sends logs by default (EnableLogs became DisableLogs).
 	if err := sentry.Init(sentry.ClientOptions{
-		EnableLogs:       true,
 		TracesSampleRate: 0,
 	}); err != nil {
 		log.Fatalf("Failed to initialize Sentry: %s\n", err)
